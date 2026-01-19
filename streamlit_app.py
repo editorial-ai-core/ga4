@@ -416,7 +416,7 @@ with st.sidebar:
     st.divider()
     st.markdown("### Developed by")
     st.markdown("**Alexey Terekhov**")
-    st.markdown("[terekhov.digital@gmail.com](mailto:terekhov.digital@gmail.com)")
+    st.markdown("[aterekhov@internews.org](mailto:aterekhov@internews.org)")
     if Path(SIDEBAR_LOGO).exists():
         st.markdown("<br>", unsafe_allow_html=True)
         render_logo(SIDEBAR_LOGO, width=160)
