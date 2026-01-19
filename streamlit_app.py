@@ -70,8 +70,8 @@ def password_gate():
         return
     if st.session_state.get("authed"):
         return
-    st.title("Вход")
-    pwd = st.text_input("Пароль", type="password")
+    st.title("Sign in")
+    pwd = st.text_input("Password", type="password")
     if pwd and pwd == app_pwd:
         st.session_state["authed"] = True
         st.rerun()
