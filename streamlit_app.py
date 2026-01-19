@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# GA4 Streamlit Dashboard — single file, secrets-only
+# Requires Streamlit Secrets:
+#   GA4_PROPERTY_ID="..."
+#   [gcp_service_account] ... (service account fields)
+# Optional:
+#   APP_PASSWORD="..."          (simple password gate)
+#   DASH_LOGO="assets/logo.svg"
+#   SIDEBAR_LOGO="assets/internews.svg"
+
 import os
 import io
 from pathlib import Path
@@ -8,63 +17,57 @@ from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 import numpy as np
 import pandas as pd
 import streamlit as st
-
 from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import (
-    RunReportRequest, Dimension, Metric, Filter, FilterExpression, FilterExpressionList, OrderBy
+    RunReportRequest, Dimension, Metric, Filter, FilterExpression,
+    FilterExpressionList, OrderBy
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Page / Style
-# ─────────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="GA4 Professional Dashboard", layout="wide")
+# ──────────────────────────────────────────────────────────────────────────────
+# Config / Styling
+# ──────────────────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="Analytics Console", layout="wide")
 
-st.markdown(
-    """
-    <style>
-    .main { background-color: #f8fafc; }
-    .stButton>button {
-        width: 100%;
-        border-radius: 12px;
-        font-weight: 700;
-        background-color: #0f172a;
-        color: white;
-        border: none;
-        padding: 0.6rem;
-        transition: all 0.2s;
-    }
-    .stButton>button:hover {
-        background-color: #000000;
-        color: white;
-        transform: translateY(-1px);
-    }
-    div[data-testid="stExpander"] {
-        border-radius: 15px;
-        border: 1px solid #e2e8f0;
-        background-color: white;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Secrets / Config
-# ─────────────────────────────────────────────────────────────────────────────
-SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"]
+# premium-ish UI like your first version
+st.markdown("""
+<style>
+.main { background-color: #f8fafc; }
+.stButton>button {
+  width: 100%;
+  border-radius: 12px;
+  font-weight: 700;
+  background-color: #0f172a;
+  color: white;
+  border: none;
+  padding: 0.6rem;
+  transition: all 0.2s;
+}
+.stButton>button:hover {
+  background-color: #000000;
+  color: white;
+  transform: translateY(-1px);
+}
+div[data-testid="stExpander"] {
+  border-radius: 15px;
+  border: 1px solid #e2e8f0;
+  background-color: white;
+}
+</style>
+""", unsafe_allow_html=True)
 
 DASH_LOGO = st.secrets.get("DASH_LOGO", os.getenv("DASH_LOGO", "assets/logo.svg"))
 SIDEBAR_LOGO = st.secrets.get("SIDEBAR_LOGO", os.getenv("SIDEBAR_LOGO", "assets/internews.svg"))
 
-INVISIBLE = ("\ufeff", "\u200b", "\u2060", "\u00a0")
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
 def fail_ui(msg: str):
     st.error(msg)
     st.stop()
 
 def password_gate():
-    app_pwd = st.secrets.get("APP_PASSWORD", "").strip()
+    app_pwd = str(st.secrets.get("APP_PASSWORD", "")).strip()
     if not app_pwd:
         return
     if st.session_state.get("authed"):
@@ -75,20 +78,6 @@ def password_gate():
         st.session_state["authed"] = True
         st.rerun()
     st.stop()
-
-@st.cache_resource
-def ga_client() -> BetaAnalyticsDataClient:
-    sa = st.secrets.get("gcp_service_account")
-    if not sa:
-        fail_ui("Не найден секрет **gcp_service_account**. Добавь его в Streamlit Secrets.")
-    creds = service_account.Credentials.from_service_account_info(dict(sa), scopes=SCOPES)
-    return BetaAnalyticsDataClient(credentials=creds)
-
-def default_property_id() -> str:
-    pid = str(st.secrets.get("GA4_PROPERTY_ID", "")).strip()
-    if not pid:
-        fail_ui("Не задан секрет **GA4_PROPERTY_ID**.")
-    return pid
 
 def render_logo(path: str, width: int | None = None):
     p = Path(path)
@@ -103,14 +92,15 @@ def render_logo(path: str, width: int | None = None):
             w_attr = f' style="width:{width}px;"' if width else ""
             st.markdown(f'<img src="{data_uri}"{w_attr}>', unsafe_allow_html=True)
         except Exception:
-            return
+            pass
     else:
-        st.image(str(p), use_container_width=(width is None), width=width)
+        st.image(str(p), use_column_width=(width is None), width=width)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Input helpers
-# ─────────────────────────────────────────────────────────────────────────────
+INVISIBLE = ("\ufeff", "\u200b", "\u2060", "\u00a0")
+
 def clean_line(s: str) -> str:
+    if s is None:
+        return ""
     if not isinstance(s, str):
         s = str(s)
     for ch in INVISIBLE:
@@ -118,89 +108,117 @@ def clean_line(s: str) -> str:
     return s.strip()
 
 def strip_utm_and_fragment(raw_url: str) -> str:
+    # remove utm_* query params and fragments; keep other query params
     p = urlparse(raw_url)
-    q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
-         if not k.lower().startswith("utm_")]
+    q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if not k.lower().startswith("utm_")]
     return urlunparse((p.scheme, p.netloc, p.path, p.params, urlencode(q, doseq=True), ""))
 
-def normalize_path(p: str) -> str:
-    p = clean_line(p)
-    if not p:
-        return ""
-    if p.lower().startswith(("http://", "https://")):
-        p = urlparse(strip_utm_and_fragment(p)).path or "/"
-    if not p.startswith("/"):
-        p = "/" + p
-    return p
+def looks_like_domain_no_scheme(s: str) -> bool:
+    # "www.domain.tld/..." or "domain.tld/..." without scheme
+    s = s.strip()
+    if not s or s.startswith("/"):
+        return False
+    # cheap heuristics: has dot in first token before slash and no spaces
+    head = s.split("/")[0]
+    return (" " not in s) and ("." in head) and (":" not in head)
 
-def path_variants(p: str) -> list[str]:
-    p = normalize_path(p)
-    if not p:
-        return []
-    if p == "/":
-        return ["/"]
-    if p.endswith("/"):
-        a = p.rstrip("/")
-        return [a, a + "/"]
-    return [p, p + "/"]
+def normalize_any_input_to_path_and_host(raw: str) -> tuple[str, str | None]:
+    """
+    Accepts:
+      - https://domain/path...
+      - http://domain/path...
+      - www.domain/path...
+      - domain/path...
+      - /path...
+      - path...
+    Returns:
+      path (always starting with "/"), host (if detected), both cleaned.
+    """
+    s = clean_line(raw)
+    if not s:
+        return "", None
 
-def url_variants(raw_url: str) -> list[str]:
-    u = clean_line(raw_url)
-    if not u.lower().startswith(("http://", "https://")):
-        return []
-    u = strip_utm_and_fragment(u)
-    p = urlparse(u)
+    # If no scheme but looks like domain -> add https:// for parsing
+    if looks_like_domain_no_scheme(s):
+        s = "https://" + s
 
-    scheme = p.scheme
-    host = p.netloc
-    path = p.path or "/"
-    query = p.query
+    if s.lower().startswith(("http://", "https://")):
+        s2 = strip_utm_and_fragment(s)
+        p = urlparse(s2)
+        path = p.path or "/"
+        host = p.hostname or None
+        if not path.startswith("/"):
+            path = "/" + path
+        return path, host
 
-    def build(netloc: str, path_: str) -> str:
-        return urlunparse((scheme, netloc, path_, "", query, ""))
+    # Not a URL; treat as path
+    if not s.startswith("/"):
+        s = "/" + s
+    return s, None
 
-    if path != "/" and path.endswith("/"):
-        path_a = path.rstrip("/")
-        path_b = path
-    else:
-        path_a = path
-        path_b = path if path.endswith("/") or path == "/" else path + "/"
-
-    hosts = [host]
-    host_l = host.lower()
-    if host_l.startswith("www."):
-        hosts.append(host[4:])
-    else:
-        hosts.append("www." + host)
-
-    out = []
-    for h in hosts:
-        for pa in [path_a, path_b]:
-            v = build(h, pa)
-            if v and v not in out:
-                out.append(v)
-    return out
+def collect_paths_hosts(raw_list: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """
+    Returns:
+      unique_paths: unique paths (order of first appearance)
+      hosts: sorted unique hosts (if detected)
+      order_list: paths in original order (duplicates kept)
+    """
+    seen = set()
+    unique_paths = []
+    hosts = set()
+    order_list = []
+    for raw in raw_list:
+        path, host = normalize_any_input_to_path_and_host(raw)
+        if not path:
+            continue
+        order_list.append(path)
+        if path not in seen:
+            seen.add(path)
+            unique_paths.append(path)
+        if host:
+            hosts.add(host)
+    return unique_paths, sorted(hosts), order_list
 
 def read_uploaded_lines(uploaded) -> list[str]:
     if uploaded is None:
         return []
-    name = (uploaded.name or "").lower()
-    if name.endswith(".txt"):
-        txt = uploaded.getvalue().decode("utf-8", errors="ignore")
-        return [clean_line(x) for x in txt.splitlines() if clean_line(x)]
-    if name.endswith(".csv"):
+    try:
+        if uploaded.name.lower().endswith(".txt"):
+            # bytes -> lines
+            return [clean_line(b.decode("utf-8", errors="ignore")) for b in uploaded.readlines()]
+        # csv
         dfu = pd.read_csv(uploaded, header=None)
-        col = dfu.iloc[:, 0].astype(str).tolist()
-        return [clean_line(x) for x in col if clean_line(x)]
-    return []
+        return [clean_line(x) for x in dfu.iloc[:, 0].tolist()]
+    except Exception:
+        return []
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# GA4 client
+# ──────────────────────────────────────────────────────────────────────────────
+SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"]
+
+@st.cache_resource
+def ga_client() -> BetaAnalyticsDataClient:
+    sa = st.secrets.get("gcp_service_account")
+    if not sa:
+        fail_ui("Missing Streamlit Secret: gcp_service_account")
+    creds = service_account.Credentials.from_service_account_info(dict(sa), scopes=SCOPES)
+    return BetaAnalyticsDataClient(credentials=creds)
+
+def default_property_id() -> str:
+    pid = str(st.secrets.get("GA4_PROPERTY_ID", "")).strip()
+    if not pid:
+        fail_ui("Missing Streamlit Secret: GA4_PROPERTY_ID")
+    return pid
+
+# ──────────────────────────────────────────────────────────────────────────────
 # GA4 queries
-# ─────────────────────────────────────────────────────────────────────────────
-# Engagement: averageEngagementTime (сек)
-METRICS_URLS = ["screenPageViews", "activeUsers", "averageEngagementTime"]
+# ──────────────────────────────────────────────────────────────────────────────
+# We keep only safe/compatible metrics for pagePath report
+METRICS_PAGE = ["screenPageViews", "activeUsers", "userEngagementDuration"]
 
 def make_path_filter(paths_batch: list[str]) -> FilterExpression:
+    # Default + reliable: BEGINS_WITH for each provided path
     exprs = [
         FilterExpression(
             filter=Filter(
@@ -216,102 +234,106 @@ def make_path_filter(paths_batch: list[str]) -> FilterExpression:
     ]
     return FilterExpression(or_group=FilterExpressionList(expressions=exprs))
 
-def fetch_ga4_by_identifiers(
-    property_id: str,
-    identifiers: list[str],
-    start_date: str,
-    end_date: str,
-    mode: str,
-) -> pd.DataFrame:
-    """
-    mode:
-      - "path": pagePath begins_with
-      - "url" : fullPageUrl exact (in_list_filter)
-    """
-    if not identifiers:
-        key_col = "pagePath" if mode == "path" else "fullPageUrl"
-        cols = [key_col, "pageTitle"] + METRICS_URLS
-        return pd.DataFrame(columns=cols)
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_by_paths_cached(property_id: str, paths: tuple, hosts: tuple, start_date: str, end_date: str, order_keys: tuple) -> pd.DataFrame:
+    return fetch_ga4_by_paths(property_id, list(paths), list(hosts), start_date, end_date, list(order_keys))
+
+def fetch_ga4_by_paths(property_id: str, paths_in: list[str], hosts_in: list[str], start_date: str, end_date: str, order_keys: list[str]) -> pd.DataFrame:
+    if not property_id:
+        property_id = default_property_id()
+
+    if not paths_in:
+        return pd.DataFrame(columns=["pagePath", "pageTitle", "hostName"] + METRICS_PAGE)
 
     client = ga_client()
     rows, BATCH = [], 25
 
-    for i in range(0, len(identifiers), BATCH):
-        batch = identifiers[i:i + BATCH]
+    for i in range(0, len(paths_in), BATCH):
+        batch = paths_in[i:i+BATCH]
+        base = make_path_filter(batch)
+        dim_filter = base
 
-        if mode == "path":
-            key_name = "pagePath"
-            req = RunReportRequest(
-                property=f"properties/{property_id}",
-                dimensions=[Dimension(name="pagePath"), Dimension(name="pageTitle")],
-                metrics=[Metric(name=m) for m in METRICS_URLS],
-                date_ranges=[{"start_date": start_date, "end_date": end_date}],
-                dimension_filter=make_path_filter(batch),
-                limit=100000,
+        dims = [Dimension(name="pagePath"), Dimension(name="pageTitle")]
+
+        # hostName filter is optional: only if we detected hosts from input
+        if hosts_in:
+            host_expr = FilterExpression(
+                filter=Filter(
+                    field_name="hostName",
+                    in_list_filter=Filter.InListFilter(values=hosts_in[:50])
+                )
             )
-        else:
-            # IMPORTANT: используем fullPageUrl (pageLocation часто даёт InvalidArgument)
-            key_name = "fullPageUrl"
-            req = RunReportRequest(
-                property=f"properties/{property_id}",
-                dimensions=[Dimension(name="fullPageUrl"), Dimension(name="pageTitle")],
-                metrics=[Metric(name=m) for m in METRICS_URLS],
-                date_ranges=[{"start_date": start_date, "end_date": end_date}],
-                dimension_filter=FilterExpression(
-                    filter=Filter(
-                        field_name="fullPageUrl",
-                        in_list_filter=Filter.InListFilter(values=batch)
-                    )
-                ),
-                limit=100000,
-            )
+            dim_filter = FilterExpression(and_group=FilterExpressionList(expressions=[base, host_expr]))
+            dims.append(Dimension(name="hostName"))
+
+        req = RunReportRequest(
+            property=f"properties/{property_id}",
+            dimensions=dims,
+            metrics=[Metric(name=m) for m in METRICS_PAGE],
+            date_ranges=[{"start_date": start_date, "end_date": end_date}],
+            dimension_filter=dim_filter,
+            limit=100000,
+        )
 
         resp = client.run_report(req)
         for r in resp.rows:
-            rec = {
-                key_name: r.dimension_values[0].value,
-                "pageTitle": r.dimension_values[1].value,
-            }
-            for j, m in enumerate(METRICS_URLS):
+            rec = {}
+            idx = 0
+            rec["pagePath"] = r.dimension_values[idx].value; idx += 1
+            rec["pageTitle"] = r.dimension_values[idx].value; idx += 1
+            if hosts_in:
+                rec["hostName"] = r.dimension_values[idx].value
+            for j, m in enumerate(METRICS_PAGE):
                 rec[m] = r.metric_values[j].value
             rows.append(rec)
 
     df = pd.DataFrame(rows)
-    if df.empty:
-        return df
 
-    for m in METRICS_URLS:
+    for m in METRICS_PAGE:
         df[m] = pd.to_numeric(df[m], errors="coerce").fillna(0)
 
-    key_name = "pagePath" if mode == "path" else "fullPageUrl"
-    agg = {
-        "screenPageViews": "sum",
-        "activeUsers": "sum",
-        "averageEngagementTime": "mean",
-        "pageTitle": "first",
-    }
-    df = df.groupby([key_name], as_index=False).agg(agg)
+    # aggregate by pagePath (same as your working code)
+    agg = {m: "sum" for m in METRICS_PAGE}
+    agg["pageTitle"] = "first"
+    if "hostName" in df.columns:
+        agg["hostName"] = "first"
 
+    if not df.empty:
+        df = df.groupby(["pagePath"], as_index=False).agg(agg)
+
+    # fill missing with zeros (preserve order)
+    present = set(df["pagePath"].tolist()) if not df.empty else set()
+    missing_unique = [p for p in paths_in if p not in present]
+    if missing_unique:
+        base_zero = {
+            "pagePath": None,
+            "pageTitle": "",
+            "screenPageViews": 0,
+            "activeUsers": 0,
+            "userEngagementDuration": 0,
+        }
+        zeros = pd.DataFrame([dict(base_zero, **{"pagePath": p}) for p in missing_unique])
+        if "hostName" in df.columns:
+            zeros["hostName"] = hosts_in[0] if hosts_in else ""
+        df = pd.concat([df, zeros], ignore_index=True)
+
+    df = df.set_index("pagePath").reindex(order_keys).reset_index()
+
+    # derived metrics: Views / ActiveUser, Avg Engagement Time (s)
     den = pd.to_numeric(df["activeUsers"], errors="coerce").replace(0, np.nan).astype(float)
-    df["viewsPerActiveUser"] = (df["screenPageViews"].astype(float).div(den)).fillna(0).round(2)
+    df["viewsPerActiveUser"] = (pd.to_numeric(df["screenPageViews"], errors="coerce").astype(float) / den).fillna(0).round(2)
+    df["avgEngagementTime_sec"] = (pd.to_numeric(df["userEngagementDuration"], errors="coerce").astype(float) / den).fillna(0).round(1)
 
     return df
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_url_mode(property_id: str, urls_in: tuple[str, ...], start_date: str, end_date: str) -> pd.DataFrame:
-    return fetch_ga4_by_identifiers(property_id, list(urls_in), start_date, end_date, mode="url")
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_path_mode(property_id: str, paths_in: tuple[str, ...], start_date: str, end_date: str) -> pd.DataFrame:
-    return fetch_ga4_by_identifiers(property_id, list(paths_in), start_date, end_date, mode="path")
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_top_materials(property_id: str, start_date: str, end_date: str, limit: int) -> pd.DataFrame:
+def fetch_top_materials_cached(property_id: str, start_date: str, end_date: str, limit: int) -> pd.DataFrame:
+    # keep it compatible: no averageEngagementTime metric here to avoid InvalidArgument
     client = ga_client()
     req = RunReportRequest(
         property=f"properties/{property_id}",
         dimensions=[Dimension(name="pagePath"), Dimension(name="pageTitle")],
-        metrics=[Metric(name="screenPageViews"), Metric(name="activeUsers")],
+        metrics=[Metric(name="screenPageViews"), Metric(name="activeUsers"), Metric(name="userEngagementDuration")],
         date_ranges=[{"start_date": start_date, "end_date": end_date}],
         order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="screenPageViews"), desc=True)],
         limit=int(limit),
@@ -319,16 +341,20 @@ def fetch_top_materials(property_id: str, start_date: str, end_date: str, limit:
     resp = client.run_report(req)
     rows = []
     for r in resp.rows:
+        views = int(float(r.metric_values[0].value or 0))
+        users = int(float(r.metric_values[1].value or 0))
+        eng = float(r.metric_values[2].value or 0)
         rows.append({
             "Path": r.dimension_values[0].value,
             "Title": r.dimension_values[1].value,
-            "Views": int(float(r.metric_values[0].value or 0)),
-            "Unique Users": int(float(r.metric_values[1].value or 0)),
+            "Views": views,
+            "Unique Users": users,
+            "Avg Engagement Time (s)": round(eng / max(users, 1), 1),
         })
     return pd.DataFrame(rows)
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_site_totals(property_id: str, start_date: str, end_date: str) -> tuple[int, int, int]:
+def fetch_site_totals_cached(property_id: str, start_date: str, end_date: str) -> pd.DataFrame:
     client = ga_client()
     req = RunReportRequest(
         property=f"properties/{property_id}",
@@ -337,16 +363,33 @@ def fetch_site_totals(property_id: str, start_date: str, end_date: str) -> tuple
         limit=1,
     )
     resp = client.run_report(req)
-    if not resp.rows:
-        return 0, 0, 0
-    v = resp.rows[0].metric_values
-    return int(float(v[0].value or 0)), int(float(v[1].value or 0)), int(float(v[2].value or 0))
+    row = resp.rows[0].metric_values if resp.rows else []
+    return pd.DataFrame([{
+        "sessions": int(row[0].value) if row else 0,
+        "totalUsers": int(row[1].value) if row else 0,
+        "screenPageViews": int(row[2].value) if row else 0,
+    }])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# App layout
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# UI
+# ──────────────────────────────────────────────────────────────────────────────
 password_gate()
 
+# Header
+head_col1, head_col2 = st.columns([4, 1])
+with head_col1:
+    st.title("Analytics Console")
+    st.markdown("Professional content performance and user engagement reporting.")
+with head_col2:
+    # prefer local logo if present; else keep GA icon
+    if Path(DASH_LOGO).exists():
+        render_logo(DASH_LOGO, width=90)
+    else:
+        st.image("https://www.gstatic.com/analytics-suite/header/suite/v2/ic_analytics.svg", width=80)
+
+st.divider()
+
+# Sidebar
 with st.sidebar:
     st.markdown("### Reporting Period")
     today = date.today()
@@ -354,208 +397,125 @@ with st.sidebar:
     date_to = st.date_input("Date To", value=today)
 
     st.divider()
-    st.markdown("### Property")
-    property_id = st.text_input("GA4 Property ID", value=default_property_id())
+    pid_default = default_property_id()
+    property_id = st.text_input("GA4 Property ID", value=pid_default)
 
     st.divider()
     st.markdown("### Developed by")
     st.markdown("**Alexey Terekhov**")
     st.markdown("[terekhov.digital@gmail.com](mailto:terekhov.digital@gmail.com)")
-    if SIDEBAR_LOGO:
+    if Path(SIDEBAR_LOGO).exists():
         st.markdown("<br>", unsafe_allow_html=True)
         render_logo(SIDEBAR_LOGO, width=160)
 
-head_col1, head_col2 = st.columns([4, 1])
-with head_col1:
-    st.title("Analytics Console")
-    st.markdown("Professional content performance and user engagement reporting.")
-with head_col2:
-    if DASH_LOGO and Path(DASH_LOGO).exists():
-        render_logo(DASH_LOGO, width=80)
-    else:
-        st.image("https://www.gstatic.com/analytics-suite/header/suite/v2/ic_analytics.svg", width=80)
-
-st.divider()
-
 tab1, tab2, tab3 = st.tabs(["URL Analytics", "Top Materials", "Global Performance"])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 1 — URL Analytics (no toggles)
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 1 — URL Analytics (auto: any input -> path)
+# ──────────────────────────────────────────────────────────────────────────────
 with tab1:
     st.subheader("URL Analytics")
 
-    c1, c2 = st.columns([3, 2])
-    with c1:
-        text = st.text_area(
+    cA, cB = st.columns([3, 2])
+    with cA:
+        uinput = st.text_area(
             "Вставьте URL или пути (по одному в строке)",
-            height=170,
-            placeholder="https://example.com/path\n/just/path\njust/path",
+            height=200,
+            placeholder=(
+                "https://www.site.com/path\n"
+                "www.site.com/path\n"
+                "site.com/path\n"
+                "/path\n"
+                "path"
+            ),
         )
-    with c2:
+    with cB:
         uploaded = st.file_uploader("Или загрузите .txt/.csv (1 в строке)", type=["txt", "csv"])
 
     lines = []
-    if text:
-        lines.extend([clean_line(x) for x in text.splitlines() if clean_line(x)])
-    lines.extend(read_uploaded_lines(uploaded))
+    if uinput:
+        lines.extend([clean_line(x) for x in uinput.splitlines() if clean_line(x)])
+    up_lines = read_uploaded_lines(uploaded)
+    lines.extend([x for x in up_lines if x])
 
-    url_lines = [x for x in lines if x.lower().startswith(("http://", "https://"))]
-    path_lines = [x for x in lines if not x.lower().startswith(("http://", "https://"))]
+    # IMPORTANT: we treat everything as "path analytics" reliably
+    # (URL lookup by full URL is unstable across GA4 properties; pagePath is reliable.)
+    # But we still "understand" any url format by extracting path + host.
+    unique_paths, hostnames, order_paths = collect_paths_hosts(lines)
 
-    # URL candidates (fullPageUrl exact)
-    url_candidates = []
-    seen_u = set()
-    for u in url_lines:
-        for v in url_variants(u):
-            if v not in seen_u:
-                seen_u.add(v)
-                url_candidates.append(v)
+    # For UX counters: count url-like vs path-like
+    url_like = sum(1 for x in lines if looks_like_domain_no_scheme(x) or x.lower().startswith(("http://", "https://")))
+    path_like = len(lines) - url_like
 
-    # Path candidates (pagePath begins_with) — берём и из URL, и из путей
-    all_for_path = path_lines + url_lines
-    path_candidates = []
-    seen_p = set()
-    order_norm = []
-    for raw in all_for_path:
-        p = normalize_path(raw)
-        pn = p.rstrip("/") if (p != "/" and p.endswith("/")) else p
-        if pn:
-            order_norm.append(pn)
-        for pv in path_variants(p):
-            if pv not in seen_p:
-                seen_p.add(pv)
-                path_candidates.append(pv)
-
-    st.caption(f"Lines: {len(lines)} | URLs: {len(url_lines)} | Paths: {len(set(order_norm))}")
+    host_txt = f" | Hosts: {', '.join(hostnames)}" if hostnames else ""
+    st.caption(f"Lines: {len(lines)} | URLs: {url_like} | Paths: {path_like}{host_txt}")
 
     if st.button("Analyze"):
-        if not lines:
-            fail_ui("Добавьте хотя бы один URL/путь.")
         if date_from > date_to:
             fail_ui("Date From must be <= Date To.")
         pid = property_id.strip()
         if not pid:
             fail_ui("GA4 Property ID is empty.")
+        if not lines:
+            fail_ui("Добавьте хотя бы один URL/путь.")
 
-        frames = []
-
-        # 1) URL exact (fullPageUrl). Если GA4 не поддерживает dimension — не валим приложение.
-        if url_candidates:
-            with st.spinner("Fetching GA4 by URL..."):
-                try:
-                    df_u = fetch_url_mode(pid, tuple(url_candidates), str(date_from), str(date_to))
-                except Exception:
-                    df_u = pd.DataFrame()
-
-            if not df_u.empty:
-                df_u = df_u.rename(columns={"fullPageUrl": "Identifier"})
-                df_u["Source"] = "URL"
-                frames.append(df_u)
-            else:
-                st.info("URL lookup is not available in this GA4 property. Using path-based lookup.")
-
-        # 2) Path begins_with (pagePath)
-        if path_candidates:
-            with st.spinner("Fetching GA4 by path..."):
-                try:
-                    df_p = fetch_path_mode(pid, tuple(path_candidates), str(date_from), str(date_to))
-                except Exception:
-                    df_p = pd.DataFrame()
-
-            if not df_p.empty:
-                df_p = df_p.rename(columns={"pagePath": "Identifier"})
-                df_p["Source"] = "Path"
-                frames.append(df_p)
-
-        if not frames:
-            st.info("No data returned for these identifiers.")
-        else:
-            df = pd.concat(frames, ignore_index=True)
-
-            def _norm_id(x: str) -> str:
-                x = str(x or "")
-                if x.startswith("http"):
-                    return x.rstrip("/")
-                return x.rstrip("/") if x != "/" else "/"
-
-            df["Identifier_norm"] = df["Identifier"].apply(_norm_id)
-
-            df["screenPageViews"] = pd.to_numeric(df["screenPageViews"], errors="coerce").fillna(0)
-            df["activeUsers"] = pd.to_numeric(df["activeUsers"], errors="coerce").fillna(0)
-            df["averageEngagementTime"] = pd.to_numeric(df["averageEngagementTime"], errors="coerce").fillna(0)
-
-            grouped = (
-                df.groupby("Identifier_norm", as_index=False)
-                  .agg({
-                      "Identifier": "first",
-                      "pageTitle": "first",
-                      "screenPageViews": "sum",
-                      "activeUsers": "sum",
-                      "averageEngagementTime": "mean",
-                  })
+        with st.spinner("Fetching GA4 by paths..."):
+            df_p = fetch_by_paths_cached(
+                pid,
+                tuple(unique_paths),
+                tuple(hostnames),
+                str(date_from),
+                str(date_to),
+                tuple(order_paths),
             )
 
-            den = pd.to_numeric(grouped["activeUsers"], errors="coerce").replace(0, np.nan).astype(float)
-            grouped["viewsPerActiveUser"] = (grouped["screenPageViews"].astype(float).div(den)).fillna(0).round(2)
-
-            # порядок: по введённым путям (из URL тоже извлекаем путь и он попадает в order_norm)
-            if order_norm:
-                base = pd.DataFrame({"Identifier_norm": [p for p in order_norm if p]})
-                out = base.merge(grouped, on="Identifier_norm", how="left")
-                present = set(out["Identifier_norm"].dropna().tolist())
-                extra = grouped[~grouped["Identifier_norm"].isin(present)]
-                out = pd.concat([out, extra], ignore_index=True)
-            else:
-                out = grouped
-
-            out["screenPageViews"] = pd.to_numeric(out["screenPageViews"], errors="coerce").fillna(0).astype(int)
-            out["activeUsers"] = pd.to_numeric(out["activeUsers"], errors="coerce").fillna(0).astype(int)
-            out["averageEngagementTime"] = pd.to_numeric(out["averageEngagementTime"], errors="coerce").fillna(0).round(1)
-            out["viewsPerActiveUser"] = pd.to_numeric(out["viewsPerActiveUser"], errors="coerce").fillna(0).round(2)
-            out["pageTitle"] = out["pageTitle"].fillna("")
-            out["Identifier"] = out["Identifier"].fillna(out["Identifier_norm"]).fillna("")
-
-            show = out.rename(columns={
-                "Identifier": "URL/Path",
+        if df_p.empty:
+            st.info("No data returned for these identifiers.")
+        else:
+            show = df_p.reindex(columns=[
+                "pagePath",
+                "pageTitle",
+                "screenPageViews",
+                "activeUsers",
+                "viewsPerActiveUser",
+                "avgEngagementTime_sec",
+            ]).rename(columns={
+                "pagePath": "Path",
                 "pageTitle": "Title",
                 "screenPageViews": "Views",
                 "activeUsers": "Unique Users",
                 "viewsPerActiveUser": "Views / Unique User",
-                "averageEngagementTime": "Avg Engagement Time (s)",
-            })[["URL/Path", "Title", "Views", "Unique Users", "Views / Unique User", "Avg Engagement Time (s)"]]
+                "avgEngagementTime_sec": "Avg Engagement Time (s)",
+            })
 
-            if (show["Views"].sum() == 0) and (show["Unique Users"].sum() == 0):
-                st.info("No data returned for these identifiers.")
-            else:
-                st.success("Done.")
-                st.dataframe(show, use_container_width=True, hide_index=True)
+            st.success(f"Found {len(show)} rows.")
+            st.dataframe(show, use_container_width=True, hide_index=True)
 
-                tot_views = int(show["Views"].sum())
-                tot_users = int(show["Unique Users"].sum())
-                ratio = tot_views / max(tot_users, 1)
-                avg_eng = float(pd.to_numeric(show["Avg Engagement Time (s)"], errors="coerce").fillna(0).mean())
+            tot_views = int(pd.to_numeric(df_p["screenPageViews"], errors="coerce").sum())
+            tot_users = int(pd.to_numeric(df_p["activeUsers"], errors="coerce").sum())
+            ratio = tot_views / max(tot_users, 1)
+            avg_eng = float(pd.to_numeric(df_p["userEngagementDuration"], errors="coerce").sum() / max(tot_users, 1))
 
-                k1, k2, k3, k4 = st.columns(4)
-                k1.metric("Views", f"{tot_views:,}")
-                k2.metric("Unique Users", f"{tot_users:,}")
-                k3.metric("Views / Unique User", f"{ratio:.2f}")
-                k4.metric("Avg Engagement Time (s)", f"{avg_eng:.1f}")
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Views", f"{tot_views:,}")
+            k2.metric("Unique Users", f"{tot_users:,}")
+            k3.metric("Views / Unique User", f"{ratio:.2f}")
+            k4.metric("Avg Engagement Time (s)", f"{avg_eng:.1f}")
 
-                st.download_button(
-                    "Export (CSV)",
-                    show.to_csv(index=False).encode("utf-8"),
-                    "ga4_url_analytics.csv",
-                    "text/csv"
-                )
+            st.download_button(
+                "Export (CSV)",
+                show.to_csv(index=False).encode("utf-8"),
+                "ga4_url_analytics.csv",
+                "text/csv",
+            )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 2 — Top Materials
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 2 — Top Materials
+# ──────────────────────────────────────────────────────────────────────────────
 with tab2:
     st.subheader("High-Performance Content")
-    lim_col, _ = st.columns([1, 2])
-    with lim_col:
+    c1, c2 = st.columns([1, 2])
+    with c1:
         limit = st.number_input("Limit", min_value=1, max_value=500, value=10)
 
     if st.button("Extract Top Content"):
@@ -566,7 +526,7 @@ with tab2:
             fail_ui("GA4 Property ID is empty.")
 
         with st.spinner(f"Extracting top {int(limit)} materials..."):
-            df_top = fetch_top_materials(pid, str(date_from), str(date_to), int(limit))
+            df_top = fetch_top_materials_cached(pid, str(date_from), str(date_to), int(limit))
 
         if df_top.empty:
             st.info("No data returned for this period.")
@@ -576,12 +536,12 @@ with tab2:
                 "Export Ranking (CSV)",
                 df_top.to_csv(index=False).encode("utf-8"),
                 "ga4_top.csv",
-                "text/csv"
+                "text/csv",
             )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tab 3 — Global Performance
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 3 — Global Performance
+# ──────────────────────────────────────────────────────────────────────────────
 with tab3:
     st.subheader("Global Site Summary")
 
@@ -593,7 +553,10 @@ with tab3:
             fail_ui("GA4 Property ID is empty.")
 
         with st.spinner("Aggregating..."):
-            s, u, v = fetch_site_totals(pid, str(date_from), str(date_to))
+            totals = fetch_site_totals_cached(pid, str(date_from), str(date_to))
+            s = int(totals.loc[0, "sessions"])
+            u = int(totals.loc[0, "totalUsers"])
+            v = int(totals.loc[0, "screenPageViews"])
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Sessions", f"{s:,}")
