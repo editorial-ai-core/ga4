@@ -608,6 +608,7 @@ with tab2:
 # ─────────────────────────────────────────────────────────────────────────────
 with tab3:
     st.subheader("Global Site Summary")
+
     if st.button("Refresh Site Totals"):
         if date_from > date_to:
             fail_ui("Date From must be <= Date To.")
@@ -616,4 +617,9 @@ with tab3:
             fail_ui("GA4 Property ID is empty.")
 
         with st.spinner("Aggregating..."):
-            s, u, v = fetch_site_totals(pid, str(date_from), str(date_t
+            s, u, v = fetch_site_totals(pid, str(date_from), str(date_to))
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Sessions", f"{s:,}")
+        c2.metric("Unique Users", f"{u:,}")
+        c3.metric("Page Views", f"{v:,}")
