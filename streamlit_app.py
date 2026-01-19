@@ -457,7 +457,7 @@ with tab1:
     host_txt = f" | Hosts: {', '.join(hostnames)}" if hostnames else ""
     st.caption(f"Lines: {len(lines)} | URLs: {url_like} | Paths: {path_like}{host_txt}")
 
-    if st.button("Analyze"):
+    if st.button("Collect"):
         if date_from > date_to:
             fail_ui("Date From must be <= Date To.")
         pid = property_id.strip()
