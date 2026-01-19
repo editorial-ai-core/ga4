@@ -18,7 +18,7 @@ from google.analytics.data_v1beta.types import (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UI
+# UI (premium look)
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="GA4 Professional Dashboard", layout="wide")
 
@@ -41,13 +41,6 @@ st.markdown(
         color: white;
         transform: translateY(-1px);
     }
-    .metric-container {
-        background-color: white;
-        padding: 24px;
-        border-radius: 20px;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
     div[data-testid="stExpander"] {
         border-radius: 15px;
         border: 1px solid #e2e8f0;
@@ -59,11 +52,12 @@ st.markdown(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Конфиг / Secrets
+# Secrets / Config
 # ─────────────────────────────────────────────────────────────────────────────
 SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"]
 DASH_LOGO = st.secrets.get("DASH_LOGO", os.getenv("DASH_LOGO", ""))
 SIDEBAR_LOGO = st.secrets.get("SIDEBAR_LOGO", os.getenv("SIDEBAR_LOGO", ""))
+
 INVISIBLE = ("\ufeff", "\u200b", "\u2060", "\u00a0")
 
 DROP_QUERY_KEYS = {
@@ -123,7 +117,7 @@ def render_logo(path: str, width: int | None = None):
         st.image(str(p), use_container_width=(width is None), width=width)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Ввод / парсинг
+# Input parsing & normalization
 # ─────────────────────────────────────────────────────────────────────────────
 def clean_line(s: str) -> str:
     if not isinstance(s, str):
@@ -133,6 +127,12 @@ def clean_line(s: str) -> str:
     return s.strip()
 
 def normalize_url(raw_url: str) -> str:
+    """
+    Нормализация URL для совпадения с GA4 pageLocation:
+    - вырезаем utm_* и кликовые id (gclid и т.п.)
+    - убираем fragment
+    - query оставляем (кроме вырезанных ключей), потому что иногда GA4 хранит URL с query
+    """
     p = urlparse(raw_url)
     q = []
     for k, v in parse_qsl(p.query, keep_blank_values=True):
@@ -143,6 +143,30 @@ def normalize_url(raw_url: str) -> str:
             continue
         q.append((k, v))
     return urlunparse((p.scheme, p.netloc, p.path, p.params, urlencode(q, doseq=True), ""))
+
+def url_variants(u: str) -> list[str]:
+    """
+    GA4 часто хранит pageLocation то со слешем на конце, то без.
+    Даем 2 варианта: .../path и .../path/
+    """
+    u = normalize_url(u)
+    if not u.lower().startswith(("http://", "https://")):
+        return []
+    p = urlparse(u)
+    base = urlunparse((p.scheme, p.netloc, p.path, "", p.query, ""))
+
+    if base.endswith("/"):
+        v1 = base[:-1]
+        v2 = base
+    else:
+        v1 = base
+        v2 = base + "/"
+
+    out = []
+    for x in [v1, v2]:
+        if x and x not in out:
+            out.append(x)
+    return out
 
 def url_to_path_host(u: str) -> tuple[str, str | None]:
     s = clean_line(u)
@@ -157,10 +181,17 @@ def url_to_path_host(u: str) -> tuple[str, str | None]:
     return s, None
 
 def collect_paths_hosts(raw_list: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """
+    Из сырых строк (пути или мусор) делаем:
+    - уникальные пути
+    - список hostName (если попадались полные URL в этих строках)
+    - order_keys для восстановления исходного порядка
+    """
     seen = set()
     unique_paths: list[str] = []
     hosts = set()
     order_list: list[str] = []
+
     for raw in raw_list:
         path, host = url_to_path_host(raw)
         if not path:
@@ -171,6 +202,7 @@ def collect_paths_hosts(raw_list: list[str]) -> tuple[list[str], list[str], list
             unique_paths.append(path)
         if host:
             hosts.add(host)
+
     return unique_paths, sorted(hosts), order_list
 
 def read_uploaded_lines(uploaded) -> list[str]:
@@ -187,9 +219,9 @@ def read_uploaded_lines(uploaded) -> list[str]:
     return []
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GA4 helpers
+# GA4 query helpers (with fallback)
 # ─────────────────────────────────────────────────────────────────────────────
-def make_path_filter(paths_batch: list[str], match_type: str) -> FilterExpression:
+def make_path_filter(paths_batch: list[str], match_type: str = "begins_with") -> FilterExpression:
     mt = Filter.StringFilter.MatchType.BEGINS_WITH
     if match_type == "exact":
         mt = Filter.StringFilter.MatchType.EXACT
@@ -218,9 +250,9 @@ def _build_batch_request(
     host_list: list[str],
     start_date: str,
     end_date: str,
-    path_match: str,
     include_aet: bool,
-    include_host: bool
+    include_host: bool,
+    path_match: str = "begins_with",
 ) -> RunReportRequest:
     metrics = [Metric(name="screenPageViews"), Metric(name="activeUsers")]
     if include_aet:
@@ -229,8 +261,8 @@ def _build_batch_request(
     if mode == "path":
         base = make_path_filter(batch, path_match)
         dims = [Dimension(name="pagePath"), Dimension(name="pageTitle")]
-
         dim_filter = base
+
         if include_host and host_list:
             host_expr = FilterExpression(
                 filter=Filter(
@@ -274,18 +306,19 @@ def run_report_with_fallback(
     host_list: list[str],
     start_date: str,
     end_date: str,
-    path_match: str,
+    path_match: str = "begins_with",
 ) -> tuple[object, list[str], bool, bool]:
     """
     Возвращает: (resp, metric_names, used_aet, used_host)
+
+    Пробуем 4 комбинации, чтобы не падать на разных GA4 properties:
+    1) AET + host
+    2) no AET + host
+    3) AET + no host
+    4) no AET + no host
     """
-    # 1) пробуем: AET + host
-    for include_aet, include_host in [
-        (True, True),
-        (False, True),
-        (True, False),
-        (False, False),
-    ]:
+    combos = [(True, True), (False, True), (True, False), (False, False)]
+    for include_aet, include_host in combos:
         req = _build_batch_request(
             property_id=property_id,
             mode=mode,
@@ -293,9 +326,9 @@ def run_report_with_fallback(
             host_list=host_list,
             start_date=start_date,
             end_date=end_date,
-            path_match=path_match,
             include_aet=include_aet,
             include_host=include_host,
+            path_match=path_match,
         )
         try:
             resp = client.run_report(req)
@@ -303,11 +336,10 @@ def run_report_with_fallback(
             return resp, metric_names, include_aet, include_host
         except InvalidArgument:
             continue
-
-    raise InvalidArgument("GA4 запрос невалиден для этого property (dimensions/metrics несовместимы).")
+    raise InvalidArgument("GA4 отклонил запрос: несовместимые dimensions/metrics для этого property.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GA4 queries (cached)
+# Cached queries
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_batch(
@@ -318,7 +350,7 @@ def fetch_batch(
     end_date: str,
     order_keys: tuple[str, ...],
     mode: str,
-    path_match: str,
+    path_match: str = "begins_with",
 ) -> pd.DataFrame:
     client = ga_client()
     rows: list[dict] = []
@@ -364,8 +396,6 @@ def fetch_batch(
             rows.append(rec)
 
     df = pd.DataFrame(rows)
-
-    # Пустой ответ
     if df.empty:
         base_cols = [key_col, "pageTitle", "screenPageViews", "activeUsers", "averageEngagementTime"]
         return pd.DataFrame(columns=base_cols)
@@ -373,21 +403,19 @@ def fetch_batch(
     for c in ["screenPageViews", "activeUsers", "averageEngagementTime"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-    # Аггрегация по ключу
+    # group by key
     agg = {
         "screenPageViews": "sum",
         "activeUsers": "sum",
         "pageTitle": "first",
+        "averageEngagementTime": "mean",
     }
-    # averageEngagementTime — среднее по ключу (если GA4 отдаёт на этом уровне)
-    agg["averageEngagementTime"] = "mean"
-
     if "hostName" in df.columns:
         agg["hostName"] = "first"
 
     df = df.groupby([key_col], as_index=False).agg(agg)
 
-    # Добавляем отсутствующие (нули), чтобы совпадало с input
+    # add missing rows so output matches input
     present = set(df[key_col].tolist())
     missing = [p for p in id_list if p not in present]
     if missing:
@@ -402,10 +430,10 @@ def fetch_batch(
             zeros["hostName"] = host_list[0] if host_list else ""
         df = pd.concat([df, zeros], ignore_index=True)
 
-    # Восстановить порядок строк как во входе
+    # restore input order
     df = df.set_index(key_col).reindex(list(order_keys)).reset_index()
 
-    # Типы/производные
+    # typing
     df["pageTitle"] = df["pageTitle"].fillna("")
     df["screenPageViews"] = pd.to_numeric(df["screenPageViews"], errors="coerce").fillna(0).astype(int)
     df["activeUsers"] = pd.to_numeric(df["activeUsers"], errors="coerce").fillna(0).astype(int)
@@ -418,7 +446,7 @@ def fetch_batch(
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_top_materials(property_id: str, start_date: str, end_date: str, limit: int) -> pd.DataFrame:
-    # Важно: averageEngagementTime часто несовместима с pagePath/pageTitle в топ-рейтинге.
+    # deliberately: no averageEngagementTime here (often invalid with pagePath/pageTitle in rankings)
     client = ga_client()
     req = RunReportRequest(
         property=f"properties/{property_id}",
@@ -455,7 +483,7 @@ def fetch_site_totals(property_id: str, start_date: str, end_date: str) -> tuple
     return int(float(v[0].value or 0)), int(float(v[1].value or 0)), int(float(v[2].value or 0))
 
 # ─────────────────────────────────────────────────────────────────────────────
-# App
+# App Layout
 # ─────────────────────────────────────────────────────────────────────────────
 password_gate()
 
@@ -492,97 +520,132 @@ with head_col2:
 
 st.divider()
 
-tab1, tab2, tab3 = st.tabs(["Batch URL Analysis", "Top Materials", "Global Performance"])
+tab1, tab2, tab3 = st.tabs(["URL Analytics", "Top Materials", "Global Performance"])
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tab 1
+# Tab 1 — URL Analytics (no confusing controls)
 # ─────────────────────────────────────────────────────────────────────────────
 with tab1:
-    st.subheader("Batch Processing")
-
-    smode = st.radio("Extraction Logic", ["By Path", "By URL"], horizontal=True)
-    mode_key = "path" if smode == "By Path" else "url"
-
-    path_match = "begins_with"
-    if mode_key == "path":
-        pm_ui = st.radio("Path matching", ["Begins with", "Exact", "Contains"], horizontal=True)
-        path_match = {"Begins with": "begins_with", "Exact": "exact", "Contains": "contains"}[pm_ui]
+    st.subheader("URL Analytics")
 
     cA, cB = st.columns([3, 2])
     with cA:
         uinput = st.text_area(
-            "Identifiers (one per line)",
+            "Вставьте URL или пути (по одному в строке)",
             height=200,
-            placeholder="/content/news-item\nhttps://domain.com/page"
+            placeholder="https://example.com/path\n/just/path\njust/path",
         )
     with cB:
-        uploaded = st.file_uploader("Or upload .txt/.csv (1 per line)", type=["txt", "csv"])
+        uploaded = st.file_uploader("Или загрузите .txt/.csv (1 в строке)", type=["txt", "csv"])
 
     lines = []
     if uinput:
         lines.extend([clean_line(x) for x in uinput.splitlines() if clean_line(x)])
     lines.extend(read_uploaded_lines(uploaded))
 
-    if mode_key == "path":
-        page_paths, hostnames, order_keys = collect_paths_hosts(lines)
-        st.caption(
-            f"Lines: {len(lines)} | Unique paths: {len(page_paths)} | "
-            f"Hosts: {', '.join(hostnames) if hostnames else '—'}"
-        )
-        identifiers = page_paths
-        hosts = hostnames
-    else:
-        urls_clean = []
-        seen = set()
-        for u in lines:
-            if not u.lower().startswith(("http://", "https://")):
-                continue
-            u2 = normalize_url(u)
-            if u2 not in seen:
-                seen.add(u2)
-                urls_clean.append(u2)
-        st.caption(f"URLs: {len(urls_clean)}")
-        identifiers = urls_clean
-        hosts = []
-        order_keys = urls_clean
+    url_inputs = [x for x in lines if x.lower().startswith(("http://", "https://"))]
+    path_inputs = [x for x in lines if not x.lower().startswith(("http://", "https://"))]
 
-    if st.button("Execute Analysis"):
+    # Paths (begins_with default)
+    page_paths, hostnames, order_paths = collect_paths_hosts(path_inputs)
+
+    # URLs (exact match with variants)
+    urls_clean = []
+    seen_u = set()
+    for u in url_inputs:
+        for v in url_variants(u):
+            if v not in seen_u:
+                seen_u.add(v)
+                urls_clean.append(v)
+
+    st.caption(
+        f"Lines: {len(lines)} | URLs: {len(url_inputs)} | Paths: {len(path_inputs)}"
+        + (f" | Hosts: {', '.join(hostnames)}" if hostnames else "")
+    )
+
+    if st.button("Analyze"):
         if date_from > date_to:
             fail_ui("Date From must be <= Date To.")
         if not property_id.strip():
             fail_ui("GA4 Property ID is empty.")
-        if not identifiers:
-            fail_ui("Input required: add at least one identifier.")
+        if not lines:
+            fail_ui("Добавьте хотя бы одну ссылку или путь.")
 
-        try:
-            with st.spinner("Fetching data..."):
-                df_batch = fetch_batch(
-                    property_id=property_id.strip(),
-                    identifiers=tuple(identifiers),
-                    hosts=tuple(hosts),
-                    start_date=str(date_from),
-                    end_date=str(date_to),
-                    order_keys=tuple(order_keys),
-                    mode=mode_key,
-                    path_match=path_match,
+        frames = []
+
+        # 1) Paths
+        if page_paths:
+            try:
+                with st.spinner("Fetching GA4 by paths..."):
+                    df_p = fetch_batch(
+                        property_id=property_id.strip(),
+                        identifiers=tuple(page_paths),
+                        hosts=tuple(hostnames),
+                        start_date=str(date_from),
+                        end_date=str(date_to),
+                        order_keys=tuple(order_paths),
+                        mode="path",
+                        path_match="begins_with",
+                    )
+            except InvalidArgument:
+                df_p = pd.DataFrame()
+
+            if not df_p.empty:
+                df_p = df_p.rename(columns={"pagePath": "Identifier"})
+                df_p["InputType"] = "Path"
+                frames.append(df_p)
+
+        # 2) URLs
+        if urls_clean:
+            try:
+                with st.spinner("Fetching GA4 by URLs..."):
+                    df_u = fetch_batch(
+                        property_id=property_id.strip(),
+                        identifiers=tuple(urls_clean),
+                        hosts=tuple([]),
+                        start_date=str(date_from),
+                        end_date=str(date_to),
+                        order_keys=tuple(urls_clean),
+                        mode="url",
+                        path_match="begins_with",
+                    )
+            except InvalidArgument:
+                df_u = pd.DataFrame()
+
+            if not df_u.empty:
+                df_u = df_u.rename(columns={"pageLocation": "Identifier"})
+                df_u["InputType"] = "URL"
+
+                # Merge / and no-/ for display (sum views/users)
+                df_u["Identifier_norm"] = df_u["Identifier"].astype(str).str.rstrip("/")
+                df_u = (
+                    df_u.groupby("Identifier_norm", as_index=False)
+                    .agg({
+                        "pageTitle": "first",
+                        "screenPageViews": "sum",
+                        "activeUsers": "sum",
+                        "averageEngagementTime": "mean",
+                        "viewsPerActiveUser": "mean",
+                    })
+                    .rename(columns={"Identifier_norm": "Identifier"})
                 )
-        except InvalidArgument:
-            fail_ui("GA4 отклонил запрос (несовместимые dimensions/metrics для этого property).")
 
-        if df_batch.empty:
+                frames.append(df_u)
+
+        if not frames:
             st.info("No data returned for these identifiers.")
         else:
-            st.success(f"Processed {len(df_batch)} rows.")
+            df_all = pd.concat(frames, ignore_index=True)
 
-            key_col = "pagePath" if mode_key == "path" else "pageLocation"
-            show_cols = [
-                key_col, "pageTitle",
-                "screenPageViews", "activeUsers",
+            show = df_all.reindex(columns=[
+                "InputType",
+                "Identifier",
+                "pageTitle",
+                "screenPageViews",
+                "activeUsers",
                 "viewsPerActiveUser",
                 "averageEngagementTime",
-            ]
-            show = df_batch.reindex(columns=[c for c in show_cols if c in df_batch.columns]).rename(columns={
-                key_col: "Identifier",
+            ]).rename(columns={
                 "pageTitle": "Title",
                 "screenPageViews": "Views",
                 "activeUsers": "Active Users",
@@ -590,30 +653,32 @@ with tab1:
                 "averageEngagementTime": "Avg Engagement Time (s)",
             })
 
-            st.dataframe(show, use_container_width=True, hide_index=True)
+            if show.empty:
+                st.info("No data returned for these identifiers.")
+            else:
+                st.success(f"Found {len(show)} rows.")
+                st.dataframe(show, use_container_width=True, hide_index=True)
 
-            tot_views = int(pd.to_numeric(df_batch["screenPageViews"], errors="coerce").sum())
-            tot_users = int(pd.to_numeric(df_batch["activeUsers"], errors="coerce").sum())
-            ratio = (tot_views / max(tot_users, 1))
+                tot_views = int(pd.to_numeric(df_all["screenPageViews"], errors="coerce").sum())
+                tot_users = int(pd.to_numeric(df_all["activeUsers"], errors="coerce").sum())
+                ratio = (tot_views / max(tot_users, 1))
+                avg_eng = float(pd.to_numeric(df_all["averageEngagementTime"], errors="coerce").fillna(0).mean())
 
-            # mean по строкам — если метрика недоступна и упала в 0, будет 0.0 (и это лучше, чем падение)
-            avg_eng = float(pd.to_numeric(df_batch["averageEngagementTime"], errors="coerce").fillna(0).mean())
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Views", f"{tot_views:,}")
+                k2.metric("Active Users", f"{tot_users:,}")
+                k3.metric("Views / Active User", f"{ratio:.2f}")
+                k4.metric("Avg Engagement Time (s)", f"{avg_eng:.1f}")
 
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Views", f"{tot_views:,}")
-            k2.metric("Active Users", f"{tot_users:,}")
-            k3.metric("Views / Active User", f"{ratio:.2f}")
-            k4.metric("Avg Engagement Time (s)", f"{avg_eng:.1f}")
-
-            st.download_button(
-                "Export Results (CSV)",
-                show.to_csv(index=False).encode("utf-8"),
-                "ga4_batch_report.csv",
-                "text/csv"
-            )
+                st.download_button(
+                    "Export (CSV)",
+                    show.to_csv(index=False).encode("utf-8"),
+                    "ga4_url_analytics.csv",
+                    "text/csv"
+                )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tab 2
+# Tab 2 — Top Materials
 # ─────────────────────────────────────────────────────────────────────────────
 with tab2:
     st.subheader("High-Performance Content")
@@ -645,7 +710,7 @@ with tab2:
             )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tab 3
+# Tab 3 — Global Performance
 # ─────────────────────────────────────────────────────────────────────────────
 with tab3:
     st.subheader("Global Site Summary")
