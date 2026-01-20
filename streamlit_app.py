@@ -1,13 +1,3 @@
-# -*- coding: utf-8 -*-
-# Analytics Console — GA4 Streamlit (single file, secrets-only)
-# Requires Streamlit Secrets:
-#   GA4_PROPERTY_ID="..."
-#   [gcp_service_account] ... (service account fields)
-# Optional:
-#   APP_PASSWORD="..."
-#   DASH_LOGO="assets/logo.svg"
-#   SIDEBAR_LOGO="assets/internews.svg"
-
 import os
 from pathlib import Path
 from datetime import date, timedelta
