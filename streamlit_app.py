@@ -432,18 +432,14 @@ with tab1:
     cA, cB = st.columns([3, 2])
     with cA:
         uinput = st.text_area(
-            "Вставьте URL или пути (по одному в строке)",
+            "Paste URLs or paths (one per line)",
             height=200,
             placeholder=(
-                "https://www.studio-l.online/economie/...\n"
-                "www.studio-l.online/economie/...\n"
-                "studio-l.online/economie/...\n"
-                "/economie/...\n"
-                "economie/..."
-            ),
+                "https://www.websitename.online/..."
+                            ),
         )
     with cB:
-        uploaded = st.file_uploader("Или загрузите .txt/.csv (1 в строке)", type=["txt", "csv"])
+        uploaded = st.file_uploader("Or upload .txt / .csv", type=["txt", "csv"])
 
     lines = []
     if uinput:
@@ -464,7 +460,7 @@ with tab1:
         if not pid:
             fail_ui("GA4 Property ID is empty.")
         if not lines:
-            fail_ui("Добавьте хотя бы один URL/путь.")
+            fail_ui("Please add at least one URL or path.")
 
         with st.spinner("Fetching GA4 (pagePath)..."):
             df_p = fetch_by_paths_cached(
