@@ -533,7 +533,7 @@ with tab2:
 # TAB 3 — Global Performance
 # ──────────────────────────────────────────────────────────────────────────────
 with tab3:
-    st.subheader("Global Site Summary")
+    st.subheader("Global Performance")
 
     if st.button("Refresh Site Totals"):
         if date_from > date_to:
