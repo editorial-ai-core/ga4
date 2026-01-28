@@ -552,3 +552,44 @@ with tab3:
         c1.metric("Sessions", f"{s:,}")
         c2.metric("Unique Users", f"{u:,}")
         c3.metric("Page Views", f"{v:,}")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 4 — Demographics
+# ──────────────────────────────────────────────────────────────────────────────
+with tab4:
+    st.subheader("Demographics")
+    st.markdown("Audience distribution by gender.")
+
+    if st.button("Load Demographics"):
+        if date_from > date_to:
+            fail_ui("Date From must be <= Date To.")
+
+        pid = property_id.strip()
+        if not pid:
+            fail_ui("GA4 Property ID is empty.")
+
+        with st.spinner("Fetching gender demographics..."):
+            df_demo = fetch_gender_demographics_cached(
+                pid,
+                str(date_from),
+                str(date_to),
+            )
+
+        if df_demo.empty:
+            st.info("No demographic data available for this period.")
+        else:
+            st.dataframe(df_demo, use_container_width=True, hide_index=True)
+
+            total_users = int(df_demo["Users"].sum())
+            total_views = int(df_demo["Views"].sum())
+
+            c1, c2 = st.columns(2)
+            c1.metric("Total Users", f"{total_users:,}")
+            c2.metric("Total Views", f"{total_views:,}")
+
+            st.download_button(
+                "Export Demographics (CSV)",
+                df_demo.to_csv(index=False).encode("utf-8"),
+                "ga4_demographics_gender.csv",
+                "text/csv",
+            )
