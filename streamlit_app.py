@@ -28,6 +28,29 @@ st.set_page_config(
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
+# PASSWORD GATE (ВОЗВРАЩЁН)
+# ──────────────────────────────────────────────────────────────────────────────
+def password_gate():
+    app_pwd = str(st.secrets.get("APP_PASSWORD", "")).strip()
+    if not app_pwd:
+        return
+
+    if st.session_state.get("authed"):
+        return
+
+    st.title("Sign in")
+    pwd = st.text_input("Password", type="password")
+
+    if pwd == app_pwd:
+        st.session_state["authed"] = True
+        st.rerun()
+
+    st.stop()
+
+
+password_gate()
+
+# ──────────────────────────────────────────────────────────────────────────────
 # STYLES
 # ──────────────────────────────────────────────────────────────────────────────
 st.markdown(
@@ -258,9 +281,7 @@ tab1, tab2, tab3, tab4 = st.tabs(
     ["URL Analytics", "Top Materials", "Global Performance", "Demographics"]
 )
 
-# ──────────────────────────────────────────────────────────────────────────────
 # TAB 1
-# ──────────────────────────────────────────────────────────────────────────────
 with tab1:
     urls = st.text_area("Paste URLs or paths (one per line)", height=200)
     if st.button("Collect"):
@@ -279,9 +300,7 @@ with tab1:
             "url_analytics.csv",
         )
 
-# ──────────────────────────────────────────────────────────────────────────────
 # TAB 2
-# ──────────────────────────────────────────────────────────────────────────────
 with tab2:
     limit = st.number_input("Limit", 1, 500, 10)
     if st.button("Load Top Materials"):
@@ -290,9 +309,7 @@ with tab2:
         )
         st.dataframe(df, use_container_width=True)
 
-# ──────────────────────────────────────────────────────────────────────────────
 # TAB 3
-# ──────────────────────────────────────────────────────────────────────────────
 with tab3:
     if st.button("Refresh Totals"):
         t = fetch_site_totals(property_id, str(date_from), str(date_to))
@@ -301,29 +318,17 @@ with tab3:
         c2.metric("Users", f"{t['Users']:,}")
         c3.metric("Views", f"{t['Views']:,}")
 
-# ──────────────────────────────────────────────────────────────────────────────
 # TAB 4 — DEMOGRAPHICS
-# ──────────────────────────────────────────────────────────────────────────────
 with tab4:
     st.subheader("Demographics — Gender")
-
     if st.button("Load Demographics"):
         df = fetch_demographics(property_id, str(date_from), str(date_to))
-
         if df.empty:
-            st.warning(
-                "No gender data returned.\n\n"
-                "Possible reasons:\n"
-                "• Google Signals is disabled in GA4\n"
-                "• Not enough users for this period\n"
-                "• Date range is before Signals activation"
-            )
+            st.warning("No gender data available for this period.")
         else:
             st.dataframe(df, use_container_width=True)
-
             st.download_button(
                 "Export Demographics CSV",
                 df.to_csv(index=False).encode("utf-8"),
                 "demographics_gender.csv",
             )
-
