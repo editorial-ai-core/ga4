@@ -306,11 +306,24 @@ with tab3:
 # ──────────────────────────────────────────────────────────────────────────────
 with tab4:
     st.subheader("Demographics — Gender")
+
     if st.button("Load Demographics"):
         df = fetch_demographics(property_id, str(date_from), str(date_to))
-        st.dataframe(df, use_container_width=True)
-        st.download_button(
-            "Export Demographics CSV",
-            df.to_csv(index=False).encode(),
-            "demographics_gender.csv",
-        )
+
+        if df.empty:
+            st.warning(
+                "No gender data returned.\n\n"
+                "Possible reasons:\n"
+                "• Google Signals is disabled in GA4\n"
+                "• Not enough users for this period\n"
+                "• Date range is before Signals activation"
+            )
+        else:
+            st.dataframe(df, use_container_width=True)
+
+            st.download_button(
+                "Export Demographics CSV",
+                df.to_csv(index=False).encode("utf-8"),
+                "demographics_gender.csv",
+            )
+
